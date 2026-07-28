@@ -213,11 +213,17 @@ def main():
     else:
         print("[!] Không lấy được proxy. Thử tải trực tiếp...")
 
+    SKIP_TITLES = {'deleted video', 'private video', '[private video]', '[deleted video]'}
+
     for video in new_videos:
         vid_id = video['id']
         title = video['title']
         print(f"\n=========================================")
         print(f"[*] Đang xử lý: {title} ({vid_id})")
+
+        if title.strip().lower() in SKIP_TITLES:
+            print(f"[!] Bỏ qua: Video đã bị xóa hoặc ở chế độ riêng tư.")
+            continue
 
         file_path, dead_proxies = download_video(vid_id, proxy, dead_proxies)
 
