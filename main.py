@@ -154,18 +154,25 @@ def log_to_sheets(sheets_service, original_id, new_id, title):
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     values = [[original_link, new_link, title, date_str, "Thành công"]]
-    body = {'values': values}
+    # Lấy tên của tab đầu tiên (để tránh lỗi do ngôn ngữ tiếng Việt như Trang tính 1)
+    sheet_metadata = sheets_service.spreadsheets().get(spreadsheetId=os.environ.get('GOOGLE_SHEET_ID')).execute()
+    first_sheet_name = sheet_metadata.get('sheets', '')[0].get("properties", {}).get("title", "Sheet1")
     
     sheets_service.spreadsheets().values().append(
-        spreadsheetId=SHEET_ID,
-        range=SHEET_RANGE,
+        spreadsheetId=os.environ.get('GOOGLE_SHEET_ID'),
+        range=f"'{first_sheet_name}'!A:E",
         valueInputOption="USER_ENTERED",
-        body=body
+        insertDataOption="INSERT_ROWS",
+        body={"values": values}
     ).execute()
     print("[+] Đã ghi log thành công!")
 
 def main():
-    if not all([SOURCE_PLAYLIST_IDS, TARGET_PLAYLIST_ID, SHEET_ID]):
+    source_playlist_ids = os.environ.get('SOURCE_PLAYLIST_IDS')
+    target_playlist_id = os.environ.get('TARGET_PLAYLIST_ID')
+    sheet_id = os.environ.get('GOOGLE_SHEET_ID')
+    
+    if not all([source_playlist_ids, target_playlist_id, sheet_id]):
         print("[!] Thiếu cấu hình Environment Variables (SOURCE_PLAYLIST_IDS, TARGET_PLAYLIST_ID, SHEET_ID...)")
         sys.exit(1)
         
