@@ -2,8 +2,8 @@ name: Karaoke Backup Automation
 
 on:
   schedule:
-    # Chạy mỗi 6 tiếng (phút 0 các giờ 0, 6, 12, 18 UTC)
-    - cron: '0 0,6,12,18 * * *'
+    # Chạy mỗi 2 tiếng 1 lần
+    - cron: '0 */2 * * *'
   workflow_dispatch:
     # Cho phép trigger chạy bằng tay từ giao diện GitHub
 
