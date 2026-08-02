@@ -1,9 +1,11 @@
 import os
 import sys
+import re
 import json
 import time
 import datetime
 import subprocess
+from ssl import SSLEOFError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -300,6 +302,16 @@ def download_video(video_id, proxy, dead_proxies):
 
     return None, dead_proxies
 
+def sanitize_title(title, fallback_id=""):
+    """Làm sạch title trước khi gửi lên YouTube API."""
+    if not title or not title.strip():
+        return f"[BACKUP] Video {fallback_id}"
+    # Xoá ký tự < > không hợp lệ với YouTube
+    title = re.sub(r'[<>]', '', title)
+    # Cắt về 95 ký tự (YouTube giới hạn 100, để dư cho prefix)
+    title = title.strip()[:95]
+    return title if title else f"[BACKUP] Video {fallback_id}"
+
 def upload_video_to_youtube(youtube, file_path, title, description):
     print(f"[*] Bắt đầu upload file {file_path} lên YouTube...")
     body = {
@@ -308,11 +320,24 @@ def upload_video_to_youtube(youtube, file_path, title, description):
     }
     media = MediaFileUpload(file_path, chunksize=-1, resumable=True)
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+
+    MAX_UPLOAD_RETRIES = 5
     response = None
+    retry_count = 0
     while response is None:
-        status, response = request.next_chunk()
-        if status:
-            print(f"  [+] Uploading... {int(status.progress() * 100)}%")
+        try:
+            status, response = request.next_chunk()
+            if status:
+                print(f"  [+] Uploading... {int(status.progress() * 100)}%")
+            retry_count = 0  # reset sau mỗi chunk thành công
+        except (SSLEOFError, Exception) as e:
+            retry_count += 1
+            if retry_count > MAX_UPLOAD_RETRIES:
+                raise
+            wait = 2 ** retry_count  # backoff: 2, 4, 8, 16, 32 giây
+            print(f"  [!] Lỗi upload chunk ({type(e).__name__}), thử lại sau {wait}s... ({retry_count}/{MAX_UPLOAD_RETRIES})")
+            time.sleep(wait)
+
     print(f"[+] Upload thành công! Video ID mới: {response['id']}")
     return response['id']
 
@@ -416,7 +441,8 @@ def main():
 
         try:
             desc = f"Backup từ video gốc: https://www.youtube.com/watch?v={vid_id}"
-            new_id = upload_video_to_youtube(youtube, file_path, f"[BACKUP] {title}", desc)
+            clean_title = sanitize_title(title, fallback_id=vid_id)
+            new_id = upload_video_to_youtube(youtube, file_path, f"[BACKUP] {clean_title}", desc)
             add_to_playlist(youtube, target_playlist_id, new_id)
             log_to_sheets(sheets_service, vid_id, new_id, title)
             uploaded_this_run += 1
