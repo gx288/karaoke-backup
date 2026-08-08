@@ -6,6 +6,9 @@ import time
 import datetime
 import subprocess
 from ssl import SSLEOFError
+import ssl
+from functools import wraps
+from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -13,6 +16,33 @@ from proxy_manager import get_working_proxy
 
 OAUTH_TOKEN_JSON = os.environ.get('GOOGLE_OAUTH_TOKEN')
 SKIP_TITLES = {'deleted video', 'private video', '[private video]', '[deleted video]'}
+
+# ─────────────────────────────────────────────
+#  RETRY DECORATOR cho mọi Google API call
+# ─────────────────────────────────────────────
+def retry_api(max_retries=5, base_wait=3):
+    """Decorator tự retry khi gặp SSLError hoặc lỗi mạng tạm thời."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except (SSLEOFError, ssl.SSLError, BrokenPipeError, ConnectionResetError) as e:
+                    wait = base_wait * attempt
+                    print(f"  [!] Lỗi mạng trong {func.__name__} ({type(e).__name__}), thử lại sau {wait}s ({attempt}/{max_retries})...")
+                    time.sleep(wait)
+                except HttpError as e:
+                    # Chỉ retry lỗi 5xx (server), không retry 4xx (client)
+                    if e.resp.status >= 500:
+                        wait = base_wait * attempt
+                        print(f"  [!] Lỗi server {e.resp.status} trong {func.__name__}, thử lại sau {wait}s ({attempt}/{max_retries})...")
+                        time.sleep(wait)
+                    else:
+                        raise
+            raise RuntimeError(f"[{func.__name__}] Thất bại sau {max_retries} lần thử.")
+        return wrapper
+    return decorator
 
 # ─────────────────────────────────────────────
 #  AUTH & SERVICE
@@ -33,12 +63,14 @@ def get_sheets_service(creds):
 # ─────────────────────────────────────────────
 #  SHEETS HELPERS
 # ─────────────────────────────────────────────
+@retry_api()
 def get_all_sheet_names(sheets_service):
     sheet_id = os.environ.get('GOOGLE_SHEET_ID')
     metadata = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
     return {s['properties']['title']: s['properties']['sheetId']
             for s in metadata.get('sheets', [])}
 
+@retry_api()
 def ensure_dashboard_sheet(sheets_service):
     """Tạo tab 'Dashboard' nếu chưa có, format header đẹp."""
     sheet_id = os.environ.get('GOOGLE_SHEET_ID')
@@ -110,6 +142,7 @@ def ensure_dashboard_sheet(sheets_service):
 
     return dash_sheet_id
 
+@retry_api()
 def update_dashboard(sheets_service, stats: dict):
     """Ghi toàn bộ thống kê lên tab Dashboard."""
     sheet_id = os.environ.get('GOOGLE_SHEET_ID')
@@ -200,6 +233,7 @@ def update_dashboard(sheets_service, stats: dict):
 # ─────────────────────────────────────────────
 #  SHEET LOG
 # ─────────────────────────────────────────────
+@retry_api()
 def read_processed_videos(sheets_service):
     """Đọc danh sách video ID đã backup từ Sheet log. Trả về set để kiểm tra O(1)."""
     print("[*] Đang đọc danh sách video đã backup từ Google Sheets...")
@@ -225,6 +259,7 @@ def read_processed_videos(sheets_service):
         print(f"[-] Lỗi đọc Sheets: {e}")
         return set()
 
+@retry_api()
 def log_to_sheets(sheets_service, original_id, new_id, title):
     print("[*] Ghi log vào Google Sheets...")
     sheet_id = os.environ.get('GOOGLE_SHEET_ID')
@@ -246,6 +281,7 @@ def log_to_sheets(sheets_service, original_id, new_id, title):
 # ─────────────────────────────────────────────
 #  YOUTUBE HELPERS
 # ─────────────────────────────────────────────
+@retry_api()
 def get_playlist_videos(youtube, playlist_id):
     print(f"[*] Lấy danh sách video từ playlist nguồn: {playlist_id}")
     videos = []
@@ -341,6 +377,7 @@ def upload_video_to_youtube(youtube, file_path, title, description):
     print(f"[+] Upload thành công! Video ID mới: {response['id']}")
     return response['id']
 
+@retry_api()
 def add_to_playlist(youtube, playlist_id, video_id):
     print(f"[*] Thêm video {video_id} vào playlist phụ {playlist_id}...")
     youtube.playlistItems().insert(
